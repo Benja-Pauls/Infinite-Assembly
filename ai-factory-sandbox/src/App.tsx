@@ -1,176 +1,240 @@
-import React, { useState } from 'react';
-import { useGameEngine } from './hooks/useGameEngine';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GameCanvas } from './components/GameCanvas';
-import { DiscoveryNotification } from './components/DiscoveryNotification';
-import { HelpOverlay } from './components/HelpOverlay';
+import { useGameEngine } from './hooks/useGameEngine';
 import { ELEMENTAL_INGREDIENTS, SIMPLE_MODIFIERS } from './types/game';
 import './App.css';
-
-interface TooltipState {
-  show: boolean;
-  text: string;
-  x: number;
-  y: number;
-}
 
 function App() {
   const {
     gameState,
+    lastDiscovery,
+    clearLastDiscovery,
     addSpawner,
     addModifier,
     startConnection,
-    updateDraggedConnection,
     completeConnection,
     cancelConnection,
-    getWealthStatus,
+    updateDraggedConnection,
     canvasDimensions,
     ITEM_SIZE,
     SELL_ZONE
   } = useGameEngine();
 
-  const [showHelp, setShowHelp] = useState(true);
   const [zoom, setZoom] = useState(1);
-  const [lastDiscovery, setLastDiscovery] = useState<any>(null);
   const [draggedItem, setDraggedItem] = useState<any>(null);
-  const [tooltip, setTooltip] = useState<TooltipState>({ show: false, text: '', x: 0, y: 0 });
+  const [showHelp, setShowHelp] = useState(false);
+  const [tooltip, setTooltip] = useState<{ content: string; x: number; y: number; type: string } | null>(null);
 
-  const formatCash = (amount: number) => {
-    if (amount >= 1000000000000) {
-      return `$${(amount / 1000000000000).toFixed(1)}T`;
-    } else if (amount >= 1000000000) {
-      return `$${(amount / 1000000000).toFixed(1)}B`;
-    } else if (amount >= 1000000) {
-      return `$${(amount / 1000000).toFixed(1)}M`;
-    } else if (amount >= 1000) {
-      return `$${(amount / 1000).toFixed(1)}K`;
-    } else {
-      return `$${amount.toFixed(0)}`;
-    }
-  };
-
-  const handleZoomIn = () => {
-    setZoom(prev => Math.min(prev + 0.2, 3));
-  };
-
-  const handleZoomOut = () => {
-    setZoom(prev => Math.max(prev - 0.2, 0.3));
-  };
-
-  const handleResetZoom = () => {
-    setZoom(1);
-  };
-
-  const handleDragStart = (e: React.DragEvent, type: 'spawner' | 'modifier', data: any) => {
-    setDraggedItem({ type, data });
+  // Handle drag start for parts
+  const handleDragStart = useCallback((e: React.DragEvent, item: any) => {
+    setDraggedItem(item);
     e.dataTransfer.effectAllowed = 'copy';
-  };
+  }, []);
 
-  const handleDragEnd = () => {
+  // Handle drag end
+  const handleDragEnd = useCallback(() => {
     setDraggedItem(null);
-  };
+  }, []);
 
-  const showTooltip = (e: React.MouseEvent, text: string) => {
-    const rect = e.currentTarget.getBoundingClientRect();
+  // Handle tooltip
+  const handleMouseEnter = useCallback((e: React.MouseEvent, content: string, type: string = 'help') => {
     setTooltip({
-      show: true,
-      text,
-      x: rect.left + rect.width / 2,
-      y: rect.top - 10
+      content,
+      x: e.clientX + 10,
+      y: e.clientY - 10,
+      type
     });
-  };
+  }, []);
 
-  const hideTooltip = () => {
-    setTooltip({ show: false, text: '', x: 0, y: 0 });
+  const handleMouseLeave = useCallback(() => {
+    setTooltip(null);
+  }, []);
+
+  // Calculate stats
+  const productionCount = gameState.spawners.length;
+  const processingCount = gameState.modifiers.filter(m => m.processingQueue.length > 0).length;
+  const discoveriesCount = Object.keys(gameState.discoveredCombos).length;
+
+  // Format cash
+  const formatCash = (cash: number) => {
+    if (cash >= 1000000) return `$${(cash / 1000000).toFixed(1)}M`;
+    if (cash >= 1000) return `$${(cash / 1000).toFixed(1)}K`;
+    return `$${cash.toFixed(2)}`;
   };
 
   return (
     <div className="app">
+      {/* Header */}
       <div className="game-header">
-        <h1>🏭 AI Factory Sandbox</h1>
-        <p>Drag from connection points to connect blocks • Items that reach the green zone make money</p>
-      </div>
-      
-      <div className="game-container">
-        <div className="sidebar">
-          <h3>Parts</h3>
+        <div className="header-left">
+          <h1>🏭 AI Factory Sandbox</h1>
+          <p>Build your production lines and discover new combinations</p>
+        </div>
+        
+        <div className="header-right">
+          <div className="stats-row">
+            <div className="stat-item">
+              <span className="stat-icon">💰</span>
+              <span className="stat-value">{formatCash(gameState.totalCash)}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-icon">📈</span>
+              <span className="stat-value">{formatCash(gameState.cashPerMinute)}/min</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-icon">🔬</span>
+              <span className="stat-value">{discoveriesCount}</span>
+            </div>
+          </div>
           
-          <div className="part-category">
-            <h4>Elements</h4>
-            {ELEMENTAL_INGREDIENTS.map(ingredient => (
-              <div
-                key={ingredient.name}
-                className="draggable-item"
-                draggable
-                onDragStart={(e) => handleDragStart(e, 'spawner', ingredient)}
-                onDragEnd={handleDragEnd}
-              >
-                {ingredient.emoji} {ingredient.name}
-              </div>
-            ))}
+          <div className="canvas-controls">
+            <button 
+              className="control-btn" 
+              onClick={() => setZoom(Math.max(0.3, zoom - 0.1))}
+              onMouseEnter={(e) => handleMouseEnter(e, 'Zoom out (Q-)', 'help')}
+              onMouseLeave={handleMouseLeave}
+            >
+              Q-
+            </button>
+            <button 
+              className="control-btn"
+              onClick={() => setZoom(1)}
+              onMouseEnter={(e) => handleMouseEnter(e, 'Reset zoom', 'help')}
+              onMouseLeave={handleMouseLeave}
+            >
+              🎯
+            </button>
+            <button 
+              className="control-btn" 
+              onClick={() => setZoom(Math.min(3, zoom + 0.1))}
+              onMouseEnter={(e) => handleMouseEnter(e, 'Zoom in (Q+)', 'help')}
+              onMouseLeave={handleMouseLeave}
+            >
+              Q+
+            </button>
+          </div>
+          
+          <button 
+            className="help-btn"
+            onClick={() => setShowHelp(!showHelp)}
+            onMouseEnter={(e) => handleMouseEnter(e, 'Show/hide help overlay', 'help')}
+            onMouseLeave={handleMouseLeave}
+          >
+            Help
+          </button>
+        </div>
+      </div>
+
+      {/* Main Container */}
+      <div className="game-container">
+        {/* Parts Panel */}
+        <div className="parts-panel">
+          {/* Production Units */}
+          <div className="parts-section">
+            <h3>🏭 Production Units</h3>
+            <div className="parts-grid">
+              {ELEMENTAL_INGREDIENTS.map((element) => (
+                <div
+                  key={element.name}
+                  className="part-item spawner-item"
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, { type: 'spawner', data: element })}
+                  onDragEnd={handleDragEnd}
+                  onMouseEnter={(e) => handleMouseEnter(e, `${element.name} Spawner\nGenerates ${element.name} elements\nDrag to place on grid`, 'item')}
+                  onMouseLeave={handleMouseLeave}
+                >
+                  <div className="part-emoji">{element.emoji}</div>
+                  <div className="part-name">{element.name}</div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="part-category">
-            <h4>Modifiers</h4>
-            {SIMPLE_MODIFIERS.map(modifier => (
-              <div
-                key={modifier.name}
-                className="draggable-item"
-                draggable
-                onDragStart={(e) => handleDragStart(e, 'modifier', modifier)}
-                onDragEnd={handleDragEnd}
-              >
-                {modifier.emoji} {modifier.name}
+          {/* Processors */}
+          <div className="parts-section">
+            <h3>⚙️ Processors</h3>
+            <div className="parts-grid">
+              {SIMPLE_MODIFIERS.map((modifier) => (
+                <div
+                  key={modifier.name}
+                  className="part-item modifier-item"
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, { type: 'modifier', data: modifier })}
+                  onDragEnd={handleDragEnd}
+                  onMouseEnter={(e) => handleMouseEnter(e, `${modifier.name} Processor\nProcesses input materials\nDrag to place on grid`, 'item')}
+                  onMouseLeave={handleMouseLeave}
+                >
+                  <div className="part-emoji">{modifier.emoji}</div>
+                  <div className="part-name">{modifier.name}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Discoveries */}
+          <div className="parts-section">
+            <h3>⭐ Discoveries</h3>
+            <div className="discoveries-list">
+              {Object.keys(gameState.discoveredCombos).length > 0 ? (
+                Object.entries(gameState.discoveredCombos).map(([name, combo]) => (
+                  <div
+                    key={name}
+                    className="discovery-item"
+                    onMouseEnter={(e) => handleMouseEnter(e, `${combo.name}\nValue: $${combo.cashPerItem}\nRarity: ${combo.rarity}`, 'discovery')}
+                    onMouseLeave={handleMouseLeave}
+                  >
+                    <div className="discovery-emoji">{combo.emoji}</div>
+                    <div className="discovery-info">
+                      <div className="discovery-name">{combo.name}</div>
+                      <div className="discovery-price">${combo.cashPerItem}</div>
+                      <div className="discovery-rarity">{combo.rarity}</div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="no-discoveries">
+                  No discoveries yet. Connect components and start processing!
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Controls Info */}
+          <div className="parts-section">
+            <h3>🎮 Controls</h3>
+            <div className="controls-info">
+              <div className="control-item">
+                <span className="control-icon">🖱️</span>
+                <span className="control-text">Click & drag to pan</span>
               </div>
-            ))}
+              <div className="control-item">
+                <span className="control-icon">🔍</span>
+                <span className="control-text">Scroll to zoom</span>
+              </div>
+              <div className="control-item">
+                <span className="control-icon">🔗</span>
+                <span className="control-text">Click connection points</span>
+              </div>
+              <div className="control-item">
+                <span className="control-icon">📦</span>
+                <span className="control-text">Drag items to place</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="game-canvas-container">
-          <div className="canvas-controls">
-            <div className="zoom-controls">
-              <button className="zoom-btn" onClick={handleZoomOut}>−</button>
-              <div className="zoom-level">{Math.round(zoom * 100)}%</div>
-              <button className="zoom-btn" onClick={handleZoomIn}>+</button>
-              <button className="zoom-btn" onClick={handleResetZoom}>Reset</button>
-            </div>
-            
-            <div className="game-stats">
-              <div 
-                className="stat-item"
-                onMouseEnter={(e) => showTooltip(e, 'Total money earned from all items sold')}
-                onMouseLeave={hideTooltip}
-              >
-                <div className="stat-label">Cash</div>
-                <div className="stat-value main-cash">{formatCash(gameState.totalCash)}</div>
-              </div>
-              <div 
-                className="stat-item"
-                onMouseEnter={(e) => showTooltip(e, 'Average money earned per minute over the last 60 seconds')}
-                onMouseLeave={hideTooltip}
-              >
-                <div className="stat-label">Per Minute</div>
-                <div className="stat-value">{formatCash(gameState.cashPerMinute)}</div>
-              </div>
-              <div 
-                className="stat-item"
-                onMouseEnter={(e) => showTooltip(e, 'Your wealth level compared to real-world milestones')}
-                onMouseLeave={hideTooltip}
-              >
-                <div className="stat-label">Net Worth</div>
-                <div className="stat-value wealth-status">{getWealthStatus()}</div>
-              </div>
-              <div 
-                className="stat-item"
-                onMouseEnter={(e) => showTooltip(e, 'Number of unique item combinations you have discovered')}
-                onMouseLeave={hideTooltip}
-              >
-                <div className="stat-label">Discoveries</div>
-                <div className="stat-value">{Object.keys(gameState.discoveredCombos).length}</div>
-              </div>
+        {/* Canvas Area */}
+        <div className="canvas-area">
+          <div className="canvas-header">
+            <h2>🏭 Factory Floor</h2>
+            <div className="canvas-stats">
+              <span>Production: {productionCount} units</span>
+              <span>Processing: {processingCount} machines</span>
+              <span>Zoom: {Math.round(zoom * 100)}%</span>
             </div>
           </div>
-
-          <div className="canvas-wrapper">
+          
+          <div className="canvas-container">
             <GameCanvas
               gameState={gameState}
               canvasWidth={canvasDimensions.width}
@@ -183,35 +247,42 @@ function App() {
               onAddSpawner={addSpawner}
               onAddModifier={addModifier}
               onStartConnection={startConnection}
-              onUpdateDraggedConnection={updateDraggedConnection}
               onCompleteConnection={completeConnection}
               onCancelConnection={cancelConnection}
+              onUpdateDraggedConnection={updateDraggedConnection}
             />
-            
-            {showHelp && (
-              <HelpOverlay onClose={() => setShowHelp(false)} />
-            )}
           </div>
         </div>
       </div>
 
-      {lastDiscovery && (
-        <DiscoveryNotification
-          discovery={lastDiscovery}
-          onClose={() => setLastDiscovery(null)}
-        />
-      )}
-
-      {tooltip.show && (
-        <div 
-          className="tooltip"
+      {/* Tooltip */}
+      {tooltip && (
+        <div
+          className={`tooltip tooltip-${tooltip.type}`}
           style={{
             left: tooltip.x,
-            top: tooltip.y,
-            transform: 'translateX(-50%)'
+            top: tooltip.y
           }}
         >
-          {tooltip.text}
+          {tooltip.content.split('\n').map((line, index) => (
+            <div key={index} className="tooltip-line">
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Discovery Popup */}
+      {lastDiscovery && (
+        <div className="discovery-popup">
+          <div className="discovery-popup-content">
+            <h3>🎉 New Discovery!</h3>
+            <div className="discovery-emoji-large">{lastDiscovery.emoji}</div>
+            <div className="discovery-name-large">{lastDiscovery.name}</div>
+            <div className="discovery-description">{lastDiscovery.description}</div>
+            <div className="discovery-value">Value: ${lastDiscovery.cashPerItem}</div>
+            <button onClick={clearLastDiscovery}>Continue</button>
+          </div>
         </div>
       )}
     </div>

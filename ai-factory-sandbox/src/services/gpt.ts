@@ -3,11 +3,6 @@ import type { GPTResponse } from '../types/game';
 
 const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
-interface OpenAIMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
 const systemPrompt = `You are a creative game designer for "AI Factory Sandbox". When given a combination of ingredients and a modifier, you create a new item with these properties:
 
 1. A creative and funny name that makes sense for the combination
@@ -34,7 +29,7 @@ Respond ONLY with a JSON object in this exact format:
 export async function combineItems(ingredients: string[], modifier: string): Promise<GPTResponse> {
   if (!OPENAI_API_KEY || OPENAI_API_KEY === 'your_openai_api_key_here') {
     // Return a fallback response for demo purposes
-    return generateFallbackResponse(ingredients, modifier);
+    return generateFallbackResponse();
   }
 
   try {
@@ -70,11 +65,11 @@ export async function combineItems(ingredients: string[], modifier: string): Pro
     return result;
   } catch (error) {
     console.error('GPT API error:', error);
-    return generateFallbackResponse(ingredients, modifier);
+    return generateFallbackResponse();
   }
 }
 
-function generateFallbackResponse(ingredients: string[], modifier: string): GPTResponse {
+function generateFallbackResponse(): GPTResponse {
   // Fallback responses for demo purposes
   const fallbacks = [
     {

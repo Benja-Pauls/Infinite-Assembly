@@ -10,6 +10,10 @@ export interface GameItem {
   vy: number;
   progress: number; // 0-1, progress along connection
   connectionId?: string; // Which connection this item is traveling on
+  rarity?: string;
+  category?: string;
+  complexity?: number;
+  description?: string;
 }
 
 export interface Spawner {
@@ -49,6 +53,8 @@ export interface Modifier {
   processInterval: number;
   inputConnection?: Connection;
   outputConnection?: Connection;
+  category?: string;
+  description?: string;
 }
 
 export interface ConnectionPoint {
@@ -66,6 +72,11 @@ export interface GPTResponse {
   emoji: string;
   cashPerItem: number;
   type: 'Ingredient' | 'Modifier';
+  rarity?: string;
+  category?: string;
+  complexity?: number;
+  description?: string;
+  isNewDiscovery?: boolean;
 }
 
 export interface GameState {
@@ -104,5 +115,7 @@ export const ELEMENTAL_INGREDIENTS = [
 export const SIMPLE_MODIFIERS = [
   { name: 'Heat', emoji: '🔥' },
   { name: 'Cool', emoji: '❄️' },
-  { name: 'Mix', emoji: '🌀' }
+  { name: 'Mix', emoji: '🌀' },
+  { name: 'Compress', emoji: '🗜️' },
+  { name: 'Purify', emoji: '✨' }
 ]; 

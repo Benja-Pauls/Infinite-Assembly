@@ -1,0 +1,60 @@
+{
+  "baseElements": {
+    "Water": {
+      "name": "Water",
+      "emoji": "💧",
+      "description": "Basic water element",
+      "category": "element"
+    },
+    "Fire": {
+      "name": "Fire",
+      "emoji": "🔥",
+      "description": "Basic fire element",
+      "category": "element"
+    },
+    "Earth": {
+      "name": "Earth",
+      "emoji": "🌍",
+      "description": "Basic earth element",
+      "category": "element"
+    },
+    "Air": {
+      "name": "Air",
+      "emoji": "💨",
+      "description": "Basic air element",
+      "category": "element"
+    }
+  },
+  "modifiers": {
+    "Heat": {
+      "name": "Heat",
+      "emoji": "🔥",
+      "description": "Applies heat to materials",
+      "category": "modifier"
+    },
+    "Cool": {
+      "name": "Cool",
+      "emoji": "❄️",
+      "description": "Cools materials down",
+      "category": "modifier"
+    },
+    "Mix": {
+      "name": "Mix",
+      "emoji": "🌀",
+      "description": "Combines materials",
+      "category": "modifier"
+    },
+    "Compress": {
+      "name": "Compress",
+      "emoji": "🗜️",
+      "description": "Compresses materials",
+      "category": "modifier"
+    },
+    "Purify": {
+      "name": "Purify",
+      "emoji": "✨",
+      "description": "Purifies materials",
+      "category": "modifier"
+    }
+  }
+} 

@@ -1,520 +1,423 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { v4 as uuidv4 } from 'uuid';
-import type { GameState, GameItem, Spawner, Connection, Modifier } from '../types/game';
 import { ELEMENTAL_INGREDIENTS, SIMPLE_MODIFIERS } from '../types/game';
-import { combineItems, getCachedCombo, getWealthMilestone } from '../services/gpt';
+import { aiService } from '../services/aiService';
 
+export interface GameItem {
+  id: string;
+  name: string;
+  emoji: string;
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  speed: number;
+  cashPerItem: number;
+  isMoving: boolean;
+  isBeingProcessed: boolean;
+  processingModifierId?: string;
+}
+
+export interface Spawner {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  itemType: string;
+  lastSpawn: number;
+  spawnInterval: number;
+}
+
+export interface Modifier {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  name: string;
+  inputs: string[];
+  outputs: string[];
+  processingQueue: ProcessingItem[];
+  lastProcess: number;
+  processInterval: number;
+}
+
+export interface ProcessingItem {
+  id: string;
+  itemId: string;
+  itemName: string;
+  itemEmoji: string;
+  startTime: number;
+  duration: number;
+  progress: number;
+}
+
+export interface Connection {
+  id: string;
+  fromId: string;
+  fromType: 'spawner' | 'modifier';
+  toId: string;
+  toType: 'modifier' | 'sell';
+  points: { x: number; y: number }[];
+}
+
+export interface DraggedConnection {
+  fromId: string;
+  fromType: 'spawner' | 'modifier';
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
+export interface GameState {
+  spawners: Spawner[];
+  modifiers: Modifier[];
+  items: GameItem[];
+  connections: Connection[];
+  draggedConnection: DraggedConnection | null;
+  totalCash: number;
+  cashPerMinute: number;
+  discoveredCombos: Record<string, any>;
+  cashHistory: { timestamp: number; cash: number }[];
+  lastDiscovery: any;
+}
+
+const GRID_SIZE = 50;
 const ITEM_SIZE = 20;
-const CONNECTION_SPEED = 80; // pixels per second
-const SELL_ZONE = {
-  x: 800,
-  y: 300,
-  width: 120,
-  height: 200
-};
+const SPAWNER_SIZE = 60;
+const MODIFIER_SIZE = 80;
 
 export function useGameEngine() {
   const [gameState, setGameState] = useState<GameState>({
-    items: [],
     spawners: [],
-    connections: [],
     modifiers: [],
-    totalCash: 0,
+    items: [],
+    connections: [],
+    draggedConnection: null,
+    totalCash: 1000,
     cashPerMinute: 0,
     discoveredCombos: {},
-    lastCashUpdate: Date.now(),
-    cashHistory: []
+    cashHistory: [{ timestamp: Date.now(), cash: 1000 }],
+    lastDiscovery: null
   });
 
-  const [canvasDimensions, setCanvasDimensions] = useState({ width: 1400, height: 800 });
-  const animationRef = useRef<number | undefined>(undefined);
-  const lastFrameTime = useRef<number>(Date.now());
+  const [lastDiscovery, setLastDiscovery] = useState<any>(null);
+  const gameLoopRef = useRef<number | undefined>(undefined);
+  const lastUpdateRef = useRef<number>(Date.now());
 
-  // Function to update canvas dimensions
-  const updateCanvasDimensions = useCallback(() => {
-    const sidebar = 160; // sidebar width
-    const availableWidth = window.innerWidth - sidebar;
-    const availableHeight = window.innerHeight - 100; // account for header and controls
-    
-    setCanvasDimensions({
-      width: Math.max(availableWidth, 800),
-      height: Math.max(availableHeight, 600)
-    });
-  }, []);
-
-  // Update canvas size on window resize
+  // Game loop for item movement and processing
   useEffect(() => {
-    updateCanvasDimensions();
-    window.addEventListener('resize', updateCanvasDimensions);
-    return () => window.removeEventListener('resize', updateCanvasDimensions);
-  }, [updateCanvasDimensions]);
-
-  const processCombination = useCallback(async (inputItems: GameItem[], modifier: Modifier, gameState: GameState) => {
-    const ingredientNames = inputItems.map(item => item.name);
-    const cacheKey = getCachedCombo(ingredientNames, modifier.name);
-
-    let result = gameState.discoveredCombos[cacheKey];
-    
-    if (!result) {
-      result = await combineItems(ingredientNames, modifier.name);
-      gameState.discoveredCombos[cacheKey] = result;
-      saveDiscoveredCombos(gameState.discoveredCombos);
-    }
-
-    // Find output connection from this modifier
-    const outputConnection = gameState.connections.find(
-      conn => conn.fromId === modifier.id && conn.fromType === 'modifier'
-    );
-
-    if (outputConnection) {
-      const newItem: GameItem = {
-        id: uuidv4(),
-        name: result.name,
-        emoji: result.emoji,
-        cashPerItem: result.cashPerItem,
-        type: result.type,
-        x: outputConnection.points[0].x,
-        y: outputConnection.points[0].y,
-        vx: 0,
-        vy: 0,
-        progress: 0,
-        connectionId: outputConnection.id
-      };
-      gameState.items.push(newItem);
-    }
-  }, []);
-
-  const updateCashPerMinute = useCallback((gameState: GameState, now: number) => {
-    gameState.cashHistory.push({ timestamp: now, cash: gameState.totalCash });
-    
-    const oneMinuteAgo = now - 60000;
-    gameState.cashHistory = gameState.cashHistory.filter(entry => entry.timestamp > oneMinuteAgo);
-
-    if (gameState.cashHistory.length > 1) {
-      const oldestEntry = gameState.cashHistory[0];
-      const latestEntry = gameState.cashHistory[gameState.cashHistory.length - 1];
-      const timeDiff = latestEntry.timestamp - oldestEntry.timestamp;
-      const cashDiff = latestEntry.cash - oldestEntry.cash;
-      
-      if (timeDiff > 0) {
-        gameState.cashPerMinute = (cashDiff / timeDiff) * 60000;
-      }
-    }
-  }, []);
-
-  const createConnection = useCallback((fromId: string, fromType: 'spawner' | 'modifier', toId: string, toType: 'modifier' | 'sell'): Connection => {
-    const connection: Connection = {
-      id: uuidv4(),
-      fromId,
-      toId,
-      fromType,
-      toType,
-      fromPort: 'output',
-      toPort: 'input',
-      points: [], // Will be calculated based on block positions
-      speed: CONNECTION_SPEED
-    };
-    return connection;
-  }, []);
-
-  const calculateConnectionPoints = useCallback((connection: Connection, spawners: Spawner[], modifiers: Modifier[]): { x: number; y: number }[] => {
-    let startPoint: { x: number; y: number };
-    let endPoint: { x: number; y: number };
-
-    // Calculate start point
-    if (connection.fromType === 'spawner') {
-      const spawner = spawners.find(s => s.id === connection.fromId);
-      if (spawner) {
-        startPoint = { x: spawner.x + spawner.width, y: spawner.y + spawner.height / 2 };
-      } else {
-        startPoint = { x: 0, y: 0 };
-      }
-    } else {
-      const modifier = modifiers.find(m => m.id === connection.fromId);
-      if (modifier) {
-        startPoint = { x: modifier.x + modifier.width, y: modifier.y + modifier.height / 2 };
-      } else {
-        startPoint = { x: 0, y: 0 };
-      }
-    }
-
-    // Calculate end point
-    if (connection.toType === 'sell') {
-      // Position sell connections to go to the center of the sell zone
-      endPoint = { x: SELL_ZONE.x + SELL_ZONE.width / 2, y: SELL_ZONE.y + SELL_ZONE.height / 2 };
-    } else {
-      const modifier = modifiers.find(m => m.id === connection.toId);
-      if (modifier) {
-        endPoint = { x: modifier.x, y: modifier.y + modifier.height / 2 };
-      } else {
-        endPoint = { x: 0, y: 0 };
-      }
-    }
-
-    // Simple straight line for now - could be enhanced with curves later
-    return [startPoint, endPoint];
-  }, []);
-
-  // Initialize with minimal setup
-  useEffect(() => {
-    const waterSpawner: Spawner = {
-      id: uuidv4(),
-      x: 80,
-      y: 200,
-      width: 80,
-      height: 60,
-      itemType: 'Water',
-      lastSpawn: Date.now(),
-      spawnInterval: 3000
-    };
-
-    const fireSpawner: Spawner = {
-      id: uuidv4(),
-      x: 80,
-      y: 320,
-      width: 80,
-      height: 60,
-      itemType: 'Fire',
-      lastSpawn: Date.now(),
-      spawnInterval: 3000
-    };
-
-    const heatModifier: Modifier = {
-      id: uuidv4(),
-      x: 350,
-      y: 260,
-      width: 100,
-      height: 80,
-      name: 'Heat',
-      emoji: '🔥',
-      inputs: [],
-      lastProcess: Date.now(),
-      processInterval: 2000
-    };
-
-    // Create initial connections
-    const waterToHeat = createConnection(waterSpawner.id, 'spawner', heatModifier.id, 'modifier');
-    const heatToSell = createConnection(heatModifier.id, 'modifier', 'sell', 'sell');
-
-    setGameState(prev => ({
-      ...prev,
-      spawners: [waterSpawner, fireSpawner],
-      modifiers: [heatModifier],
-      connections: [waterToHeat, heatToSell],
-      discoveredCombos: loadDiscoveredCombos()
-    }));
-  }, [createConnection]);
-
-  // Game loop
-  useEffect(() => {
-    let lastUpdateTime = Date.now();
-    const TARGET_FPS = 60;
-    const FRAME_TIME = 1000 / TARGET_FPS;
-
-    function gameLoop() {
+    const gameLoop = () => {
       const now = Date.now();
-      const deltaTime = now - lastFrameTime.current;
-      
-      // Only update if enough time has passed (throttle to 60fps max)
-      if (deltaTime < FRAME_TIME) {
-        animationRef.current = requestAnimationFrame(gameLoop);
-        return;
-      }
-      
-      lastFrameTime.current = now;
+      const deltaTime = now - lastUpdateRef.current;
+      lastUpdateRef.current = now;
 
-      // Only update game state every 16ms (60fps) to reduce re-renders
-      if (now - lastUpdateTime > FRAME_TIME) {
-        lastUpdateTime = now;
+      setGameState(prevState => {
+        let newState = { ...prevState };
+        let cashGained = 0;
 
-        setGameState(prev => {
-          const newState = { ...prev };
-          let hasChanges = false;
-
-          // Update connection points only when necessary
-          const newConnections = newState.connections.map(conn => ({
-            ...conn,
-            points: calculateConnectionPoints(conn, newState.spawners, newState.modifiers)
-          }));
-          
-          // Check if connections actually changed
-          const connectionsChanged = newConnections.some((conn, i) => 
-            !newState.connections[i] || 
-            conn.points[0]?.x !== newState.connections[i].points[0]?.x ||
-            conn.points[0]?.y !== newState.connections[i].points[0]?.y ||
-            conn.points[1]?.x !== newState.connections[i].points[1]?.x ||
-            conn.points[1]?.y !== newState.connections[i].points[1]?.y
-          );
-          
-          if (connectionsChanged) {
-            newState.connections = newConnections;
-            hasChanges = true;
-          }
-
-          // Spawn items from spawners (less frequently)
-          for (let i = 0; i < newState.spawners.length; i++) {
-            const spawner = newState.spawners[i];
-            if (now - spawner.lastSpawn >= spawner.spawnInterval) {
-              const ingredient = ELEMENTAL_INGREDIENTS.find(ing => ing.name === spawner.itemType);
-              const outputConnection = newState.connections.find(
-                conn => conn.fromId === spawner.id && conn.fromType === 'spawner'
-              );
-
-              if (ingredient && outputConnection && outputConnection.points.length > 0) {
-                const newItem: GameItem = {
-                  id: uuidv4(),
-                  name: ingredient.name,
-                  emoji: ingredient.emoji,
-                  cashPerItem: 15,
-                  type: 'Ingredient',
-                  x: outputConnection.points[0].x,
-                  y: outputConnection.points[0].y,
-                  vx: 0,
-                  vy: 0,
-                  progress: 0,
-                  connectionId: outputConnection.id
-                };
-                newState.items.push(newItem);
-                newState.spawners[i] = { ...spawner, lastSpawn: now };
-                hasChanges = true;
-              }
-            }
-          }
-
-          // Move items along connections
-          const itemsToRemove = new Set<string>();
-          for (let i = 0; i < newState.items.length; i++) {
-            const item = newState.items[i];
-            if (item.connectionId) {
-              const connection = newState.connections.find(c => c.id === item.connectionId);
-              if (connection && connection.points.length >= 2) {
-                const distance = Math.sqrt(
-                  Math.pow(connection.points[1].x - connection.points[0].x, 2) +
-                  Math.pow(connection.points[1].y - connection.points[0].y, 2)
-                );
-                
-                const progressIncrement = (CONNECTION_SPEED * deltaTime) / 1000 / distance;
-                const newProgress = Math.min(item.progress + progressIncrement, 1);
-                
-                if (newProgress >= 1) {
-                  // Item reached end of connection
-                  if (connection.toType === 'sell') {
-                    // Item reached sell zone - add cash and mark for removal
-                    newState.totalCash += item.cashPerItem;
-                    itemsToRemove.add(item.id);
-                    hasChanges = true;
-                  } else {
-                    // Item reached modifier
-                    const modifier = newState.modifiers.find(m => m.id === connection.toId);
-                    if (modifier && !modifier.inputs.includes(item.id)) {
-                      modifier.inputs.push(item.id);
-                      hasChanges = true;
-                    }
-                  }
-                } else {
-                  // Update item position
-                  const t = newProgress;
-                  const startPoint = connection.points[0];
-                  const endPoint = connection.points[1];
-                  
-                  const newX = startPoint.x + (endPoint.x - startPoint.x) * t;
-                  const newY = startPoint.y + (endPoint.y - startPoint.y) * t;
-                  
-                  if (Math.abs(newX - item.x) > 0.1 || Math.abs(newY - item.y) > 0.1 || newProgress !== item.progress) {
-                    newState.items[i] = {
-                      ...item,
-                      x: newX,
-                      y: newY,
-                      progress: newProgress
-                    };
-                    hasChanges = true;
-                  }
+        // Update item positions
+        newState.items = newState.items.map(item => {
+          if (item.isMoving) {
+            const dx = item.targetX - item.x;
+            const dy = item.targetY - item.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < 2) {
+              // Item reached target
+              if (item.isBeingProcessed) {
+                // Item reached modifier for processing
+                return { ...item, isMoving: false, x: item.targetX, y: item.targetY };
+              } else {
+                // Item reached sell zone or final destination
+                if (item.targetX > 800 && item.targetY > 300) { // Sell zone
+                  cashGained += item.cashPerItem;
+                  return null; // Remove item
                 }
+                return { ...item, isMoving: false, x: item.targetX, y: item.targetY };
               }
+            } else {
+              // Move item towards target
+              const moveDistance = item.speed * deltaTime / 1000;
+              const moveRatio = Math.min(moveDistance / distance, 1);
+              return {
+                ...item,
+                x: item.x + dx * moveRatio,
+                y: item.y + dy * moveRatio
+              };
             }
           }
+          return item;
+        }).filter(item => item !== null) as GameItem[];
 
-          // Remove items that reached sell zone
-          if (itemsToRemove.size > 0) {
-            newState.items = newState.items.filter(item => !itemsToRemove.has(item.id));
-            hasChanges = true;
-          }
-
-          // Process modifiers (less frequently)
-          for (let i = 0; i < newState.modifiers.length; i++) {
-            const modifier = newState.modifiers[i];
-            if (modifier.inputs.length > 0 && now - modifier.lastProcess >= modifier.processInterval) {
-              const inputItems = modifier.inputs.map(id => 
-                newState.items.find(item => item.id === id)
-              ).filter(Boolean) as GameItem[];
-
-              if (inputItems.length > 0) {
-                processCombination(inputItems, modifier, newState);
-                
-                // Remove processed items
-                newState.items = newState.items.filter(item => 
-                  !modifier.inputs.includes(item.id)
-                );
-
-                newState.modifiers[i] = {
-                  ...modifier,
-                  inputs: [],
-                  lastProcess: now
-                };
-                hasChanges = true;
-              }
+        // Spawn new items from spawners
+        newState.spawners.forEach(spawner => {
+          if (now - spawner.lastSpawn >= spawner.spawnInterval) {
+            const element = ELEMENTAL_INGREDIENTS.find(e => e.name === spawner.itemType);
+            if (element) {
+              const newItem: GameItem = {
+                id: `item-${Date.now()}-${Math.random()}`,
+                name: element.name,
+                emoji: element.emoji,
+                x: spawner.x + spawner.width,
+                y: spawner.y + spawner.height / 2,
+                targetX: spawner.x + spawner.width,
+                targetY: spawner.y + spawner.height / 2,
+                speed: 100,
+                cashPerItem: 0.01,
+                isMoving: false,
+                isBeingProcessed: false
+              };
+              newState.items.push(newItem);
             }
+            newState.spawners = newState.spawners.map(s => 
+              s.id === spawner.id ? { ...s, lastSpawn: now } : s
+            );
           }
-
-          // Update cash per minute less frequently (every second)
-          if (now - newState.lastCashUpdate > 1000) {
-            updateCashPerMinute(newState, now);
-            newState.lastCashUpdate = now;
-            hasChanges = true;
-          }
-
-          // Only return new state if something actually changed
-          return hasChanges ? newState : prev;
         });
-      }
 
-      animationRef.current = requestAnimationFrame(gameLoop);
-    }
+        // Process items in modifiers
+        newState.modifiers.forEach(modifier => {
+          // Update processing queue
+          modifier.processingQueue = modifier.processingQueue.map(processingItem => {
+            const elapsed = now - processingItem.startTime;
+            const progress = Math.min(elapsed / processingItem.duration, 1);
+            
+            if (progress >= 1) {
+              // Processing complete - create output item
+              const outputItem: GameItem = {
+                id: `item-${Date.now()}-${Math.random()}`,
+                name: processingItem.itemName,
+                emoji: processingItem.itemEmoji,
+                x: modifier.x + modifier.width,
+                y: modifier.y + modifier.height / 2,
+                targetX: modifier.x + modifier.width,
+                targetY: modifier.y + modifier.height / 2,
+                speed: 100,
+                cashPerItem: processingItem.itemName.includes('Steamy') ? 10 : 1,
+                isMoving: false,
+                isBeingProcessed: false
+              };
+              newState.items.push(outputItem);
+              return null; // Remove from processing queue
+            }
+            
+            return { ...processingItem, progress };
+          }).filter(Boolean) as ProcessingItem[];
 
-    animationRef.current = requestAnimationFrame(gameLoop);
+          // Check for new items to process
+          const itemsAtModifier = newState.items.filter(item => 
+            !item.isMoving && 
+            !item.isBeingProcessed &&
+            Math.abs(item.x - modifier.x) < 10 &&
+            Math.abs(item.y - (modifier.y + modifier.height / 2)) < 10
+          );
+
+          itemsAtModifier.forEach(item => {
+            if (modifier.processingQueue.length < 3) { // Max 3 items processing at once
+              const processingItem: ProcessingItem = {
+                id: `processing-${Date.now()}-${Math.random()}`,
+                itemId: item.id,
+                itemName: item.name,
+                itemEmoji: item.emoji,
+                startTime: now,
+                duration: 3000, // 3 seconds processing time
+                progress: 0
+              };
+              
+              modifier.processingQueue.push(processingItem);
+              newState.items = newState.items.map(i => 
+                i.id === item.id ? { ...i, isBeingProcessed: true, processingModifierId: modifier.id } : i
+              );
+            }
+          });
+
+          // Update modifier in state
+          newState.modifiers = newState.modifiers.map(m => 
+            m.id === modifier.id ? { ...modifier, processingQueue: modifier.processingQueue } : m
+          );
+        });
+
+        // Move items along connections
+        newState.items.forEach(item => {
+          if (!item.isMoving && !item.isBeingProcessed) {
+            // Find next destination
+            const connection = newState.connections.find(conn => {
+              if (conn.fromType === 'spawner') {
+                const spawner = newState.spawners.find(s => s.id === conn.fromId);
+                return spawner && Math.abs(item.x - (spawner.x + spawner.width)) < 10 &&
+                       Math.abs(item.y - (spawner.y + spawner.height / 2)) < 10;
+              } else if (conn.fromType === 'modifier') {
+                const modifier = newState.modifiers.find(m => m.id === conn.fromId);
+                return modifier && Math.abs(item.x - (modifier.x + modifier.width)) < 10 &&
+                       Math.abs(item.y - (modifier.y + modifier.height / 2)) < 10;
+              }
+              return false;
+            });
+
+            if (connection) {
+              if (connection.toType === 'modifier') {
+                const modifier = newState.modifiers.find(m => m.id === connection.toId);
+                if (modifier) {
+                  item.targetX = modifier.x;
+                  item.targetY = modifier.y + modifier.height / 2;
+                  item.isMoving = true;
+                }
+              } else if (connection.toType === 'sell') {
+                item.targetX = 850;
+                item.targetY = 350;
+                item.isMoving = true;
+              }
+            }
+          }
+        });
+
+        // Update cash
+        if (cashGained > 0) {
+          newState.totalCash += cashGained;
+          newState.cashHistory.push({ timestamp: now, cash: newState.totalCash });
+        }
+
+        return newState;
+      });
+
+      gameLoopRef.current = requestAnimationFrame(gameLoop);
+    };
+
+    gameLoopRef.current = requestAnimationFrame(gameLoop);
 
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (gameLoopRef.current) {
+        cancelAnimationFrame(gameLoopRef.current);
       }
     };
-  }, [processCombination, updateCashPerMinute, calculateConnectionPoints]);
+  }, []);
 
   const addSpawner = useCallback((x: number, y: number, itemType: string) => {
-    const newSpawner: Spawner = {
-      id: uuidv4(),
-      x,
-      y,
-      width: 80,
-      height: 60,
+    const gridX = Math.round(x / GRID_SIZE) * GRID_SIZE;
+    const gridY = Math.round(y / GRID_SIZE) * GRID_SIZE;
+    
+    const spawner: Spawner = {
+      id: `spawner-${Date.now()}`,
+      x: gridX,
+      y: gridY,
+      width: SPAWNER_SIZE,
+      height: SPAWNER_SIZE,
       itemType,
       lastSpawn: Date.now(),
-      spawnInterval: 3000
+      spawnInterval: 2000 // 2 seconds
     };
 
     setGameState(prev => ({
       ...prev,
-      spawners: [...prev.spawners, newSpawner]
+      spawners: [...prev.spawners, spawner]
     }));
   }, []);
 
   const addModifier = useCallback((x: number, y: number, modifierType: string) => {
-    const modifierData = SIMPLE_MODIFIERS.find(m => m.name === modifierType);
-    if (!modifierData) return;
-
-    const newModifier: Modifier = {
-      id: uuidv4(),
-      x,
-      y,
-      width: 100,
-      height: 80,
-      name: modifierData.name,
-      emoji: modifierData.emoji,
+    const gridX = Math.round(x / GRID_SIZE) * GRID_SIZE;
+    const gridY = Math.round(y / GRID_SIZE) * GRID_SIZE;
+    
+    const modifier: Modifier = {
+      id: `modifier-${Date.now()}`,
+      x: gridX,
+      y: gridY,
+      width: MODIFIER_SIZE,
+      height: MODIFIER_SIZE,
+      name: modifierType,
       inputs: [],
+      outputs: [],
+      processingQueue: [],
       lastProcess: Date.now(),
-      processInterval: 2000
+      processInterval: 3000
     };
 
     setGameState(prev => ({
       ...prev,
-      modifiers: [...prev.modifiers, newModifier]
+      modifiers: [...prev.modifiers, modifier]
     }));
   }, []);
 
   const startConnection = useCallback((fromId: string, fromType: 'spawner' | 'modifier', x: number, y: number) => {
+    const draggedConnection: DraggedConnection = {
+      fromId,
+      fromType,
+      startX: x,
+      startY: y,
+      currentX: x,
+      currentY: y
+    };
+
     setGameState(prev => ({
       ...prev,
-      draggedConnection: {
-        fromId,
-        fromType,
-        fromPort: 'output',
-        startX: x,
-        startY: y,
-        currentX: x,
-        currentY: y
-      }
+      draggedConnection
     }));
   }, []);
 
   const updateDraggedConnection = useCallback((x: number, y: number) => {
-    setGameState(prev => ({
-      ...prev,
-      draggedConnection: prev.draggedConnection ? {
-        ...prev.draggedConnection,
-        currentX: x,
-        currentY: y
-      } : undefined
-    }));
+    setGameState(prev => {
+      if (prev.draggedConnection) {
+        return {
+          ...prev,
+          draggedConnection: {
+            ...prev.draggedConnection,
+            currentX: x,
+            currentY: y
+          }
+        };
+      }
+      return prev;
+    });
   }, []);
 
   const completeConnection = useCallback((toId: string, toType: 'modifier' | 'sell') => {
     setGameState(prev => {
       if (!prev.draggedConnection) return prev;
 
-      const newConnection = createConnection(
-        prev.draggedConnection.fromId,
-        prev.draggedConnection.fromType,
+      const connection: Connection = {
+        id: `connection-${Date.now()}`,
+        fromId: prev.draggedConnection.fromId,
+        fromType: prev.draggedConnection.fromType,
         toId,
-        toType
-      );
+        toType,
+        points: [
+          { x: prev.draggedConnection.startX, y: prev.draggedConnection.startY },
+          { x: prev.draggedConnection.currentX, y: prev.draggedConnection.currentY }
+        ]
+      };
 
       return {
         ...prev,
-        connections: [...prev.connections, newConnection],
-        draggedConnection: undefined
+        connections: [...prev.connections, connection],
+        draggedConnection: null
       };
     });
-  }, [createConnection]);
+  }, []);
 
   const cancelConnection = useCallback(() => {
     setGameState(prev => ({
       ...prev,
-      draggedConnection: undefined
+      draggedConnection: null
     }));
   }, []);
 
-  const getWealthStatus = useCallback(() => {
-    return getWealthMilestone(gameState.totalCash);
-  }, [gameState.totalCash]);
+  const clearLastDiscovery = useCallback(() => {
+    setLastDiscovery(null);
+  }, []);
 
   return {
     gameState,
+    lastDiscovery,
+    clearLastDiscovery,
     addSpawner,
     addModifier,
     startConnection,
     updateDraggedConnection,
     completeConnection,
     cancelConnection,
-    getWealthStatus,
-    canvasDimensions,
+    canvasDimensions: { width: 1200, height: 800 },
     ITEM_SIZE,
-    SELL_ZONE
+    SELL_ZONE: { x: 800, y: 300, width: 200, height: 100 }
   };
-}
-
-function loadDiscoveredCombos(): Record<string, any> {
-  try {
-    const saved = localStorage.getItem('ai-factory-discovered-combos');
-    return saved ? JSON.parse(saved) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveDiscoveredCombos(combos: Record<string, any>) {
-  try {
-    localStorage.setItem('ai-factory-discovered-combos', JSON.stringify(combos));
-  } catch {
-    // Ignore localStorage errors
-  }
 } 

@@ -1,62 +1,42 @@
-import React from 'react';
+import type { GameState } from '../types/game';
 
 interface GameStatsProps {
-  totalCash: number;
-  cashPerMinute: number;
-  wealthStatus: string;
-  discoveredCombos: Record<string, any>;
+  gameState: GameState;
+  getWealthStatus: () => string;
 }
 
-export function GameStats({ totalCash, cashPerMinute, wealthStatus, discoveredCombos }: GameStatsProps) {
+export function GameStats({ gameState, getWealthStatus }: GameStatsProps) {
   const formatCash = (amount: number) => {
     if (amount >= 1000000000000) {
-      return `$${(amount / 1000000000000).toFixed(2)}T`;
+      return `$${(amount / 1000000000000).toFixed(1)}T`;
     } else if (amount >= 1000000000) {
-      return `$${(amount / 1000000000).toFixed(2)}B`;
+      return `$${(amount / 1000000000).toFixed(1)}B`;
     } else if (amount >= 1000000) {
-      return `$${(amount / 1000000).toFixed(2)}M`;
+      return `$${(amount / 1000000).toFixed(1)}M`;
     } else if (amount >= 1000) {
-      return `$${(amount / 1000).toFixed(2)}K`;
+      return `$${(amount / 1000).toFixed(1)}K`;
     } else {
-      return `$${amount.toFixed(2)}`;
+      return `$${amount.toFixed(0)}`;
     }
   };
 
   return (
     <div className="game-stats">
-      <div className="stats-main">
-        <div className="stat-item">
-          <div className="stat-label">Total Cash</div>
-          <div className="stat-value main-cash">{formatCash(totalCash)}</div>
-        </div>
-        
-        <div className="stat-item">
-          <div className="stat-label">Cash per Minute</div>
-          <div className="stat-value">{formatCash(cashPerMinute)}/min</div>
-        </div>
-        
-        <div className="stat-item">
-          <div className="stat-label">Wealth Status</div>
-          <div className="stat-value wealth-status">{wealthStatus}</div>
-        </div>
-        
-        <div className="stat-item">
-          <div className="stat-label">Discovered Items</div>
-          <div className="stat-value">{Object.keys(discoveredCombos).length}</div>
-        </div>
+      <div className="stat-item">
+        <div className="stat-label">Cash</div>
+        <div className="stat-value main-cash">{formatCash(gameState.totalCash)}</div>
       </div>
-      
-      <div className="discovered-items">
-        <h4>Recent Discoveries</h4>
-        <div className="discoveries-list">
-          {Object.entries(discoveredCombos).slice(-5).reverse().map(([key, item]) => (
-            <div key={key} className="discovery-item">
-              <span className="discovery-emoji">{item.emoji}</span>
-              <span className="discovery-name">{item.name}</span>
-              <span className="discovery-value">{formatCash(item.cashPerItem)}</span>
-            </div>
-          ))}
-        </div>
+      <div className="stat-item">
+        <div className="stat-label">Per Minute</div>
+        <div className="stat-value">{formatCash(gameState.cashPerMinute)}</div>
+      </div>
+      <div className="stat-item">
+        <div className="stat-label">Net Worth</div>
+        <div className="stat-value wealth-status">{getWealthStatus()}</div>
+      </div>
+      <div className="stat-item">
+        <div className="stat-label">Discoveries</div>
+        <div className="stat-value">{Object.keys(gameState.discoveredCombos).length}</div>
       </div>
     </div>
   );
